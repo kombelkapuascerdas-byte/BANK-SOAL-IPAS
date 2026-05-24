@@ -1,0 +1,813 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EduCBT - Portal Ujian</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- SheetJS for Excel Parsing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+    <!-- Phosphor Icons -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Babel untuk JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- SUPABASE JS CLIENT -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f8fafc; }
+        
+        /* Custom Scrollbar */
+        .custom-scroll::-webkit-scrollbar { width: 6px; }
+        .custom-scroll::-webkit-scrollbar-track { background: transparent; }
+        .custom-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        .custom-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+        /* Loader */
+        .loader {
+            border: 4px solid #e2e8f0; border-top: 4px solid #2563eb;
+            border-radius: 50%; width: 40px; height: 40px;
+            animation: spin 1s linear infinite; display: inline-block;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        /* Animations */
+        .toast-enter-active { transform: translateY(0); opacity: 1; transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+        .animate-bounce-in { animation: bounceIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+        @keyframes bounceIn { 0% { transform: scale(0.8); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+
+        .opsi-label { transition: all 0.2s ease; }
+    </style>
+</head>
+<body class="text-slate-800 antialiased selection:bg-blue-200 selection:text-blue-900">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // ==========================================
+        // 1. KREDENSIAL SUPABASE (UBAH BAGIAN INI)
+        // ==========================================
+        const SUPABASE_URL = 'https://xyzabcdef.supabase.co'; // <--- GANTI URL PROJECT ANDA
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR...'; // <--- GANTI ANON KEY PROJECT ANDA
+        
+        const isMockMode = SUPABASE_URL.includes('xyzabcdef'); // Jika masih default, jalankan mock mode
+        let supabase = null;
+        
+        if (!isMockMode) {
+            supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        }
+
+        // ==========================================
+        // 2. ENGINE DATABASE (Menghubungkan React ke Supabase)
+        // ==========================================
+        const apiDatabase = async (method, ...args) => {
+            // Fallback (Simulasi) jika belum disetup
+            if (isMockMode) {
+                console.log(`Mocking Supabase: ${method}`, args);
+                await new Promise(r => setTimeout(r, 800)); // Simulasi Jaringan
+                
+                if (method === 'processLogin') {
+                    const [u, p] = args;
+                    if (u === 'admin') return { success: true, role: 'Admin', nama: 'Administrator', nis: 'admin' };
+                    return { success: true, role: 'Siswa', nama: 'Siswa Simulasi', nis: u };
+                }
+                if (method === 'generateUjian') {
+                    const [tipe] = args;
+                    const dummy = [];
+                    for(let i=1; i<=(tipe==='Sumatif'?40:20); i++) {
+                        dummy.push({ nomor: i, id: 'S00'+i, pertanyaan: `Soal dummy nomor ${i} untuk ${tipe}? (Server Mock / Database Belum Terhubung)`, opsi: { A: 'Opsi A', B: 'Opsi B', C: 'Opsi C', D: 'Opsi D', E: 'Opsi E' }});
+                    }
+                    return { success: true, soal: dummy, tipe: tipe };
+                }
+                if (method === 'submitJawaban') return { success: true, nilai: 85, benar: 17, total: 20 };
+                if (method === 'getRekapNilai') return [[new Date().toString(), '12345', 'Siswa Dummy 1', 'Bab 1', 18, 20, 90], [new Date().toString(), '67890', 'Siswa Dummy 2', 'Sumatif', 30, 40, 75]];
+                if (method === 'getDaftarSoalAdmin') return [['S001', 'Bab 1', 'Sub 1.1', 'Dasar', 'Apa nama ibukota Indonesia?', 'Bandung', 'Jakarta', 'Surabaya', 'Semarang', 'Medan', 'B']];
+                if (method === 'hapusSoalAdmin') return {success: true};
+                if (method === 'importSoalMasal') return {success: true, message: `${args[0].length} soal diimport (Simulasi)`};
+            }
+
+            // Real Supabase Execution
+            try {
+                if (method === 'processLogin') {
+                    const [username, password] = args;
+                    const { data, error } = await supabase.from('users').select('*').eq('nis_username', username).single();
+                    if (error || !data) return { success: false, message: 'Pengguna tidak ditemukan.' };
+                    
+                    if (data.role === 'Admin') {
+                        if (password === data.password) return { success: true, role: 'Admin', nama: data.nama, nis: username };
+                        return { success: false, message: 'Password Admin Salah!' };
+                    } else {
+                        if (!data.password || password === data.password) return { success: true, role: 'Siswa', nama: data.nama, nis: username };
+                        return { success: false, message: 'Password Siswa Salah!' };
+                    }
+                }
+                
+                if (method === 'generateUjian') {
+                    const [tipeUjian] = args;
+                    let query = supabase.from('bank_soal').select('*');
+                    if (tipeUjian !== 'Sumatif') query = query.eq('bab', tipeUjian);
+                    
+                    const { data, error } = await query;
+                    if (error || !data || data.length === 0) return { success: false, message: 'Bank soal kosong untuk kategori ini.' };
+                    
+                    // Shuffle Array
+                    let soalTerpilih = data.sort(() => Math.random() - 0.5);
+                    const targetTotal = tipeUjian === 'Sumatif' ? 40 : 20;
+                    soalTerpilih = soalTerpilih.slice(0, targetTotal);
+                    
+                    const soalUntukKlien = soalTerpilih.map((s, i) => ({
+                        nomor: i + 1, id: s.id_soal, pertanyaan: s.pertanyaan,
+                        opsi: { A: s.opsi_a, B: s.opsi_b, C: s.opsi_c, D: s.opsi_d, E: s.opsi_e }
+                    }));
+                    return { success: true, soal: soalUntukKlien, tipe: tipeUjian };
+                }
+                
+                if (method === 'submitJawaban') {
+                    const [nis, nama, tipeLatihan, jawabanSiswa] = args;
+                    const { data: soalData, error: errSoal } = await supabase.from('bank_soal').select('id_soal, jawaban_benar');
+                    if (errSoal || !soalData) return { success: false, message: 'Gagal memvalidasi jawaban di server.' };
+                    
+                    const kunciJawaban = {};
+                    soalData.forEach(s => kunciJawaban[s.id_soal] = s.jawaban_benar);
+                    
+                    let benar = 0;
+                    const totalSoal = Object.keys(jawabanSiswa).length;
+                    for (const id in jawabanSiswa) {
+                        if (jawabanSiswa[id] === kunciJawaban[id]) benar++;
+                    }
+                    const nilai = totalSoal > 0 ? Math.round((benar / totalSoal) * 100) : 0;
+                    
+                    const { error: errInsert } = await supabase.from('rekap_nilai').insert([{
+                        nis: nis, nama_siswa: nama, tipe_latihan: tipeLatihan, benar: benar, total_soal: totalSoal, skor_akhir: nilai
+                    }]);
+                    if (errInsert) return { success: false, message: 'Gagal merekam nilai ke database.' };
+                    return { success: true, nilai: nilai, benar: benar, total: totalSoal };
+                }
+
+                if (method === 'getRekapNilai') {
+                    const { data, error } = await supabase.from('rekap_nilai').select('*').order('waktu', { ascending: false });
+                    if (error) throw error;
+                    return data.map(r => [r.waktu, r.nis, r.nama_siswa, r.tipe_latihan, r.benar, r.total_soal, r.skor_akhir]);
+                }
+
+                if (method === 'getDaftarSoalAdmin') {
+                    const { data, error } = await supabase.from('bank_soal').select('*').order('id_soal', { ascending: true });
+                    if (error) throw error;
+                    return data.map(s => [s.id_soal, s.bab, s.sub_bab, s.kesulitan, s.pertanyaan, s.opsi_a, s.opsi_b, s.opsi_c, s.opsi_d, s.opsi_e, s.jawaban_benar]);
+                }
+
+                if (method === 'hapusSoalAdmin') {
+                    const [id] = args;
+                    const { error } = await supabase.from('bank_soal').delete().eq('id_soal', id);
+                    if (error) throw error;
+                    return { success: true };
+                }
+
+                if (method === 'importSoalMasal') {
+                    const [dataRows] = args;
+                    const toInsert = dataRows.map((row, index) => ({
+                        id_soal: 'S' + Date.now() + index, // Generasi ID unik di frontend
+                        bab: row[0], sub_bab: row[1], kesulitan: row[2], pertanyaan: row[3],
+                        opsi_a: row[4], opsi_b: row[5], opsi_c: row[6], opsi_d: row[7], opsi_e: row[8], jawaban_benar: row[9]
+                    }));
+                    const { error } = await supabase.from('bank_soal').insert(toInsert);
+                    if (error) return { success: false, message: error.message };
+                    return { success: true, message: `${toInsert.length} soal berhasil diimpor.` };
+                }
+                
+                throw new Error('Metode Supabase tidak ditemukan');
+            } catch (e) {
+                console.error('Supabase Query Error:', e);
+                throw e;
+            }
+        };
+
+        // --- COMPONENTS ---
+        const Toast = ({ message, type = 'success' }) => {
+            const bgClass = type === 'success' ? 'bg-emerald-500' : type === 'error' ? 'bg-red-500' : 'bg-amber-500';
+            const iconClass = type === 'success' ? 'ph-check-circle' : type === 'error' ? 'ph-warning-octagon' : 'ph-info';
+            return (
+                <div className={`fixed top-6 right-6 ${bgClass} text-white px-6 py-4 rounded-xl shadow-lg z-[9999] flex items-center gap-3 font-bold toast-enter-active animate-bounce-in`}>
+                    <i className={`ph ${iconClass} text-2xl`}></i> {message}
+                </div>
+            );
+        };
+
+        const ConfirmModal = ({ isOpen, title, message, onConfirm, onCancel, confirmText="Ya", cancelText="Batal", isDanger=false }) => {
+            if (!isOpen) return null;
+            return (
+                <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex justify-center items-center z-[9000] p-4">
+                    <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden animate-bounce-in">
+                        <div className="p-6 text-center">
+                            <div className={`w-16 h-16 mx-auto rounded-full flex items-center justify-center mb-4 ${isDanger ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'}`}>
+                                <i className={`ph text-3xl ${isDanger ? 'ph-warning' : 'ph-question'}`}></i>
+                            </div>
+                            <h3 className="font-extrabold text-xl text-slate-800 mb-2">{title}</h3>
+                            <p className="text-slate-500 font-medium">{message}</p>
+                        </div>
+                        <div className="flex border-t border-slate-100">
+                            <button onClick={onCancel} className="flex-1 py-4 font-bold text-slate-500 hover:bg-slate-50 transition">
+                                {cancelText}
+                            </button>
+                            <button onClick={onConfirm} className={`flex-1 py-4 font-bold transition ${isDanger ? 'text-red-600 hover:bg-red-50' : 'text-blue-600 hover:bg-blue-50'} border-l border-slate-100`}>
+                                {confirmText}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const LoadingOverlay = ({ text="Memproses Data..." }) => (
+            <div className="fixed inset-0 bg-white/80 backdrop-blur-sm z-[8000] flex flex-col items-center justify-center">
+                <div className="loader mb-4 shadow-lg"></div>
+                <p className="text-blue-700 font-bold animate-pulse text-lg">{text}</p>
+            </div>
+        );
+
+        const AuthModal = ({ isOpen, role, onClose, onLoginSuccess }) => {
+            const [username, setUsername] = useState('');
+            const [password, setPassword] = useState('');
+            const [loadingAuth, setLoadingAuth] = useState(false);
+
+            if (!isOpen) return null;
+
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                setLoadingAuth(true);
+                try {
+                    const res = await apiDatabase('processLogin', username, password);
+                    if (res.success) {
+                        if ((role === 'Guru' && res.role !== 'Admin') || (role === 'Siswa' && res.role !== 'Siswa')) {
+                            alert(`Akses ditolak. Anda login sebagai ${res.role}.`); 
+                        } else {
+                            onLoginSuccess(res);
+                            setUsername('');
+                            setPassword('');
+                        }
+                    } else {
+                        alert(res.message); 
+                    }
+                } catch (err) {
+                    alert('Gagal terhubung ke database server.'); 
+                }
+                setLoadingAuth(false);
+            };
+
+            return (
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex justify-center items-center z-[9000] p-4">
+                    <div className="bg-white p-8 rounded-3xl shadow-2xl w-full max-w-md animate-bounce-in relative">
+                        <button onClick={onClose} className="absolute top-6 right-6 text-slate-400 hover:text-slate-600 bg-slate-100 rounded-full p-2 transition-colors">
+                            <i className="ph ph-x"></i>
+                        </button>
+                        <div className="text-center mb-8">
+                            <div className={`mx-auto w-16 h-16 rounded-full flex items-center justify-center mb-4 ${role === 'Guru' ? 'bg-amber-100 text-amber-600' : 'bg-blue-100 text-blue-600'}`}>
+                                <i className={`ph ${role === 'Guru' ? 'ph-chalkboard-teacher' : 'ph-student'} text-4xl`}></i>
+                            </div>
+                            <h3 className="text-2xl font-extrabold text-slate-800">
+                                {role === 'Guru' ? 'Portal Pendidik' : 'Identitas Peserta'}
+                            </h3>
+                            <p className="text-sm text-slate-500 font-medium mt-1">
+                                {role === 'Guru' ? 'Silakan masuk untuk mengelola CBT' : 'Masukkan kredensial untuk mengakses soal'}
+                            </p>
+                        </div>
+                        
+                        <form onSubmit={handleSubmit} className="space-y-5">
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 ml-1">
+                                    {role === 'Guru' ? 'Username / ID' : 'NIS / Username'}
+                                </label>
+                                <input type="text" value={username} onChange={e=>setUsername(e.target.value)} required placeholder={role === 'Guru' ? "Contoh: admin" : "Contoh: 1001"} className="w-full border-2 border-slate-200 p-4 rounded-xl focus:ring-4 focus:ring-blue-50 focus:border-blue-500 outline-none transition text-lg font-semibold text-slate-700" />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 ml-1">Password</label>
+                                <input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder={role === 'Siswa' ? "Kosongkan jika tidak ada" : "••••••"} className={`w-full border-2 border-slate-200 p-4 rounded-xl focus:ring-4 focus:ring-blue-50 focus:border-blue-500 outline-none transition text-lg font-semibold text-slate-700 ${password && 'tracking-[0.2em]'}`} />
+                            </div>
+                            {role === 'Guru' && (
+                                <div className="text-center p-3 bg-slate-50 rounded-xl border border-slate-100 mt-2">
+                                    <p className="text-xs font-semibold text-slate-500 mb-1">Akses Database Supabase Default:</p>
+                                    <p className="text-xs font-mono text-slate-700 bg-white inline-block px-2 py-1 rounded shadow-sm border border-slate-200">admin : admin123</p>
+                                </div>
+                            )}
+                            <button type="submit" disabled={loadingAuth} className={`w-full text-white font-bold py-4 rounded-xl shadow-lg transition-all flex justify-center items-center gap-2 mt-4 disabled:opacity-50 ${role === 'Guru' ? 'bg-slate-800 hover:bg-slate-900 shadow-slate-800/20' : 'bg-blue-600 hover:bg-blue-700 shadow-blue-600/20'}`}>
+                                {loadingAuth ? <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> : (role === 'Guru' ? 'Otorisasi Akses' : 'Masuk Ujian')}
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            );
+        };
+
+        const App = () => {
+            const [toast, setToast] = useState(null);
+            const [confirmDialog, setConfirmDialog] = useState({ isOpen: false });
+            const [loading, setLoading] = useState(false);
+            
+            const [view, setView] = useState('student-dash'); 
+            const [currentUser, setCurrentUser] = useState(null); 
+            const [authModal, setAuthModal] = useState({ isOpen: false, role: null, onSuccess: null });
+            
+            const [quizData, setQuizData] = useState(null);
+            const [quizResult, setQuizResult] = useState(null);
+
+            const showToast = (msg, type='success') => {
+                setToast({ message: msg, type });
+                setTimeout(() => setToast(null), 3000);
+            };
+            
+            window.alert = (msg) => showToast(msg, 'error');
+
+            const requestConfirm = (title, message, onConfirm, isDanger=false) => {
+                setConfirmDialog({ isOpen: true, title, message, onConfirm: () => { setConfirmDialog({isOpen: false}); onConfirm(); }, isDanger });
+            };
+
+            const handleLogout = () => {
+                requestConfirm("Keluar", "Yakin ingin keluar dari sistem?", () => {
+                    setCurrentUser(null);
+                    setView('student-dash');
+                });
+            };
+
+            const StudentDashView = () => {
+                const babs = ["Evaluasi Pembelajaran Bab 1", "Evaluasi Pembelajaran Bab 2", "Evaluasi Pembelajaran Bab 3", "Evaluasi Pembelajaran Bab 4", "Evaluasi Pembelajaran Bab 5", "Evaluasi Pembelajaran Bab 6"];
+                
+                const handleStart = (babName, type) => {
+                    const prepareQuiz = async (user) => {
+                        setLoading(true);
+                        try {
+                            const queryType = type === 'Sumatif' ? 'Sumatif' : babName.replace("Evaluasi Pembelajaran ", "");
+                            const res = await apiDatabase('generateUjian', queryType);
+                            if (res.success) {
+                                setQuizData(res);
+                                setView('quiz');
+                            } else {
+                                showToast(res.message, 'error');
+                            }
+                        } catch(e) { showToast("Gagal memuat soal", 'error'); }
+                        setLoading(false);
+                    };
+
+                    if (!currentUser || currentUser.role !== 'Siswa') {
+                        setAuthModal({
+                            isOpen: true, role: 'Siswa',
+                            onSuccess: (user) => {
+                                setCurrentUser(user);
+                                setAuthModal({ isOpen: false, role: null, onSuccess: null });
+                                showToast(`Selamat datang, ${user.nama}!`);
+                                prepareQuiz(user); 
+                            }
+                        });
+                    } else {
+                        requestConfirm("Mulai Sesi?", `Anda akan memulai ujian: ${babName}.`, () => prepareQuiz(currentUser));
+                    }
+                };
+
+                return (
+                    <div className="w-full">
+                        {isMockMode && (
+                            <div className="bg-amber-100 border border-amber-300 text-amber-800 px-4 py-3 rounded-2xl mb-6 font-semibold flex items-center gap-3">
+                                <i className="ph ph-warning-circle text-2xl"></i>
+                                Perhatian: Anda sedang menjalankan Mode Simulasi. Edit variabel SUPABASE_URL di dalam file untuk menghubungkan ke database sungguhan.
+                            </div>
+                        )}
+                        <div className="bg-blue-600 rounded-3xl p-8 sm:p-12 text-white shadow-lg relative overflow-hidden mb-10 w-full">
+                            <div className="relative z-10">
+                                <h1 className="text-3xl sm:text-4xl lg:text-4xl font-semibold mb-3">
+                                    Pilih modul materi atau ujian di bawah ini. Pastikan Anda memiliki koneksi yang stabil sebelum memulai sesi.
+                                </h1>
+                            </div>
+                            <div className="absolute inset-0 bg-gradient-to-r from-blue-600/50 to-blue-400/50 mix-blend-overlay"></div>
+                        </div>
+
+                        <div className="flex items-center mb-6">
+                            <h2 className="text-2xl font-bold text-slate-800">Modul & Ujian Aktif</h2>
+                            <div className="h-px bg-slate-200 flex-1 ml-6"></div>
+                        </div>
+
+                        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 pb-12">
+                            {babs.map((bab, idx) => (
+                                <div key={idx} onClick={() => handleStart(bab, 'Bab')} className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm hover:shadow-lg transition-all duration-300 flex flex-col justify-between cursor-pointer relative overflow-hidden h-64">
+                                    <div className="absolute top-0 right-0 w-32 h-32 bg-slate-50 rounded-bl-full -z-0"></div>
+                                    <div className="relative z-10 flex-1">
+                                        <div className="flex justify-between items-start mb-6">
+                                            <div className="bg-blue-50 text-blue-600 w-12 h-12 rounded-xl flex items-center justify-center">
+                                                <i className="ph ph-file-text text-2xl font-bold"></i>
+                                            </div>
+                                            <span className="px-3 py-1 bg-green-100 text-green-600 text-[10px] font-extrabold rounded-full uppercase tracking-wider">Tersedia</span>
+                                        </div>
+                                        <h3 className="font-extrabold text-xl text-slate-800 leading-snug">{bab}</h3>
+                                        <p className="text-xs font-mono text-slate-400 mt-2">ID: U-00{idx+1}</p>
+                                    </div>
+                                    <div className="relative z-10 w-full pt-4 border-t border-slate-100">
+                                        <span className="text-blue-600 font-bold text-sm">Mulai Sesi</span>
+                                    </div>
+                                </div>
+                            ))}
+                            
+                            <div onClick={() => handleStart('Simulasi Literasi & Numerasi Dasar', 'Sumatif')} className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm hover:shadow-lg transition-all duration-300 flex flex-col justify-between cursor-pointer relative overflow-hidden h-64">
+                                <div className="absolute top-0 right-0 w-32 h-32 bg-slate-50 rounded-bl-full -z-0"></div>
+                                <div className="relative z-10 flex-1">
+                                    <div className="flex justify-between items-start mb-6">
+                                        <div className="bg-blue-50 text-blue-600 w-12 h-12 rounded-xl flex items-center justify-center">
+                                            <i className="ph ph-file-text text-2xl font-bold"></i>
+                                        </div>
+                                        <span className="px-3 py-1 bg-green-100 text-green-600 text-[10px] font-extrabold rounded-full uppercase tracking-wider">Tersedia</span>
+                                    </div>
+                                    <h3 className="font-extrabold text-xl text-slate-800 leading-snug">Ujian Sumatif (Seluruh Bab)</h3>
+                                    <p className="text-xs font-mono text-slate-400 mt-2">ID: U-099</p>
+                                </div>
+                                <div className="relative z-10 w-full pt-4 border-t border-slate-100">
+                                    <span className="text-blue-600 font-bold text-sm">Mulai Sesi</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                );
+            };
+
+            const CBTView = () => {
+                const { soal, tipe } = quizData;
+                const [idx, setIdx] = useState(0);
+                const [answers, setAnswers] = useState({});
+                const [ragu, setRagu] = useState({});
+                const [timeLeft, setTimeLeft] = useState(tipe === 'Sumatif' ? 120 * 60 : 60 * 60);
+
+                useEffect(() => {
+                    const timer = setInterval(() => {
+                        setTimeLeft(prev => {
+                            if (prev <= 1) { clearInterval(timer); handleAutoSubmit(); return 0; }
+                            return prev - 1;
+                        });
+                    }, 1000);
+                    return () => clearInterval(timer);
+                }, []);
+
+                const handleSelect = (qId, val) => { setAnswers(prev => ({ ...prev, [qId]: val })); };
+                const toggleRagu = (qId) => { setRagu(prev => ({ ...prev, [qId]: !prev[qId] })); };
+
+                const submitToServer = async () => {
+                    setLoading(true);
+                    try {
+                        const res = await apiDatabase('submitJawaban', currentUser.nis, currentUser.nama, tipe, answers);
+                        if(res.success) { setQuizResult(res); setView('result'); }
+                        else showToast("Gagal menyimpan nilai", 'error');
+                    } catch(e) { showToast("Error koneksi", "error"); }
+                    setLoading(false);
+                };
+
+                const handleAutoSubmit = () => { submitToServer(); };
+                const handleManualSubmit = () => {
+                    const terjawab = Object.keys(answers).length;
+                    if(terjawab < soal.length) {
+                        requestConfirm("Belum Selesai!", `Baru dijawab ${terjawab} dari ${soal.length}. Yakin kirim?`, submitToServer, true);
+                    } else {
+                        requestConfirm("Selesai", "Kirim jawaban dan akhiri ujian?", submitToServer);
+                    }
+                };
+
+                const formatTime = (secs) => {
+                    const h = Math.floor(secs / 3600); const m = Math.floor((secs % 3600) / 60); const s = secs % 60;
+                    return `${h>0?h.toString().padStart(2,'0')+':':''}${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+                };
+
+                const currentQ = soal[idx];
+                const optionKeys = ['A', 'B', 'C', 'D', 'E'];
+
+                return (
+                    <div className="flex-1 flex flex-col h-[calc(100vh-8rem)]">
+                        <div className="flex flex-col lg:flex-row gap-6 flex-1 h-full min-h-0">
+                            {/* Kiri: Area Soal */}
+                            <div className="flex-1 flex flex-col min-w-0 bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm">
+                                <div className="bg-slate-50 border-b border-slate-200 p-5 flex justify-between items-center shrink-0">
+                                    <div className="font-extrabold text-slate-800 text-lg flex items-center gap-3">
+                                        <span className="text-blue-600 bg-blue-100 px-3 py-1 rounded-lg text-sm uppercase tracking-wider">{tipe}</span>
+                                        <span className="text-slate-300">|</span> 
+                                        Soal No. <span className="bg-slate-800 text-white px-3 py-1 rounded-lg">{idx + 1}</span>
+                                    </div>
+                                    <div className={`px-4 py-2 rounded-xl font-mono font-bold text-lg flex items-center gap-2 shadow-sm border ${timeLeft < 300 ? 'bg-red-50 text-red-600 border-red-200 animate-pulse' : 'bg-white text-slate-700 border-slate-200'}`}>
+                                        <i className="ph ph-timer"></i> <span>{formatTime(timeLeft)}</span>
+                                    </div>
+                                </div>
+
+                                <div className="flex-1 p-6 sm:p-10 overflow-y-auto custom-scroll text-lg leading-relaxed text-slate-800">
+                                    <div className="mb-8 font-semibold text-xl" dangerouslySetInnerHTML={{__html: currentQ.pertanyaan.replace(/\n/g, '<br>')}}></div>
+                                    <div className="space-y-4">
+                                        {optionKeys.map(key => {
+                                            if(!currentQ.opsi[key]) return null;
+                                            const isSelected = answers[currentQ.id] === key;
+                                            return (
+                                                <label key={key} className={`opsi-label block relative border-2 rounded-2xl p-5 cursor-pointer hover:bg-slate-50 transition-all ${isSelected ? 'bg-blue-50 border-blue-500 ring-2 ring-blue-500/20' : 'border-slate-200'}`}>
+                                                    <div className="flex items-start gap-4">
+                                                        <div className={`w-8 h-8 rounded-full border-2 flex items-center justify-center shrink-0 mt-0.5 transition-colors ${isSelected ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-300 text-transparent'}`}>
+                                                            {isSelected && <i className="ph ph-check-bold text-sm"></i>}
+                                                        </div>
+                                                        <input type="radio" name="opsi" className="hidden" checked={isSelected} onChange={() => handleSelect(currentQ.id, key)} />
+                                                        <div className="flex-1 font-medium text-slate-700">
+                                                            <span className="font-extrabold mr-2 text-slate-400">{key}.</span> {currentQ.opsi[key]}
+                                                        </div>
+                                                    </div>
+                                                </label>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+
+                                <div className="p-5 bg-white border-t border-slate-200 flex flex-wrap sm:flex-nowrap justify-between gap-4 shrink-0">
+                                    <button onClick={() => setIdx(p => p-1)} disabled={idx === 0} className="px-6 py-4 rounded-2xl font-bold bg-slate-100 text-slate-600 hover:bg-slate-200 transition-colors flex items-center gap-2 disabled:opacity-50">
+                                        <i className="ph ph-caret-left text-xl font-bold"></i> Sebelumnya
+                                    </button>
+                                    <button onClick={() => toggleRagu(currentQ.id)} className={`px-6 py-4 rounded-2xl font-bold border-2 transition-colors flex items-center gap-2 flex-1 justify-center ${ragu[currentQ.id] ? 'bg-amber-100 border-amber-400 text-amber-700' : 'border-amber-400 text-amber-600 hover:bg-amber-50'}`}>
+                                        <i className={`ph ${ragu[currentQ.id] ? 'ph-warning-circle-fill' : 'ph-warning-circle'} text-2xl`}></i> Ragu-ragu
+                                    </button>
+                                    <button onClick={() => setIdx(p => Math.min(soal.length - 1, p + 1))} disabled={idx === soal.length - 1} className="px-6 py-4 rounded-2xl font-bold bg-blue-600 text-white hover:bg-blue-700 transition-colors shadow-lg shadow-blue-600/30 flex items-center gap-2 disabled:opacity-50">
+                                        Selanjutnya <i className="ph ph-caret-right text-xl font-bold"></i>
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Kanan: Navigasi */}
+                            <div className="w-full lg:w-80 bg-white border border-slate-200 rounded-3xl flex flex-col shadow-sm shrink-0 overflow-hidden">
+                                <div className="p-5 border-b border-slate-200 bg-slate-50"><h3 className="font-extrabold text-slate-800 flex items-center gap-2 text-lg"><i className="ph ph-squares-four text-blue-600 text-xl"></i> Navigasi Soal</h3></div>
+                                <div className="p-5 flex-1 overflow-y-auto custom-scroll">
+                                    <div className="grid grid-cols-5 gap-3">
+                                        {soal.map((q, i) => {
+                                            const isAns = !!answers[q.id]; const isRagu = !!ragu[q.id]; const isAktif = i === idx;
+                                            let cls = "aspect-square flex items-center justify-center rounded-xl font-bold text-sm transition-all cursor-pointer border-2 ";
+                                            if (isAktif) cls += "ring-4 ring-blue-100 border-blue-600 scale-105 z-10 "; else cls += "border-transparent ";
+                                            if (isRagu) cls += "bg-amber-400 text-white hover:bg-amber-500";
+                                            else if (isAns) cls += "bg-emerald-500 text-white hover:bg-emerald-600";
+                                            else cls += "bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200";
+                                            return <button key={i} onClick={() => setIdx(i)} className={cls}>{i + 1}</button>;
+                                        })}
+                                    </div>
+                                </div>
+                                <div className="p-5 border-t border-slate-200 bg-slate-50 text-sm font-medium space-y-3">
+                                    <div className="flex items-center gap-3 text-slate-600"><div className="w-5 h-5 bg-slate-100 border-2 border-slate-200 rounded"></div> Belum Dijawab</div>
+                                    <div className="flex items-center gap-3 text-slate-600"><div className="w-5 h-5 bg-emerald-500 rounded shadow-sm"></div> Sudah Dijawab</div>
+                                    <div className="flex items-center gap-3 text-slate-600"><div className="w-5 h-5 bg-amber-400 rounded shadow-sm"></div> Ragu-ragu</div>
+                                    <button onClick={handleManualSubmit} className="w-full mt-6 bg-emerald-600 text-white py-4 rounded-2xl font-extrabold hover:bg-emerald-700 transition-colors shadow-lg shadow-emerald-600/30 flex justify-center items-center gap-2 text-lg">
+                                        <i className="ph ph-check-circle text-2xl"></i> Selesai & Kirim
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                );
+            };
+
+            const ResultView = () => (
+                <div className="flex-1 flex flex-col items-center justify-center py-10 w-full">
+                    <div className="w-24 h-24 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center text-5xl mb-6 shadow-inner animate-bounce-in">
+                        <i className="ph ph-check-fat-fill"></i>
+                    </div>
+                    <h2 className="text-3xl font-extrabold text-slate-800 mb-2">Evaluasi Selesai!</h2>
+                    <p className="text-slate-500 font-medium mb-8">Kerja bagus, berikut adalah ringkasan hasil latihan Anda.</p>
+                    
+                    <div className="grid grid-cols-2 gap-4 max-w-lg w-full mb-10 px-4">
+                        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm text-center">
+                            <span className="block text-sm font-bold text-slate-400 uppercase tracking-wide mb-2">Skor Akhir</span>
+                            <span className="block text-6xl font-black text-blue-600">{quizResult.nilai}</span>
+                        </div>
+                        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm text-center flex flex-col justify-center">
+                            <span className="block text-sm font-bold text-slate-400 uppercase tracking-wide mb-2">Benar / Total</span>
+                            <div className="text-4xl font-bold text-slate-700 flex justify-center items-baseline gap-1">
+                                <span className="text-emerald-600">{quizResult.benar}</span>
+                                <span className="text-2xl text-slate-400">/</span>
+                                <span className="text-2xl">{quizResult.total}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <button onClick={() => {setQuizResult(null); setView('student-dash');}} className="bg-slate-800 text-white px-8 py-4 rounded-2xl font-bold hover:bg-slate-900 transition-colors shadow-lg shadow-slate-800/30 flex items-center gap-2 text-lg">
+                        <i className="ph ph-house text-xl"></i> Kembali ke Dashboard
+                    </button>
+                </div>
+            );
+
+            const AdminDashView = () => {
+                const [tab, setTab] = useState('bank'); // bank, nilai
+                const [bankSoal, setBankSoal] = useState([]);
+                const [rekapNilai, setRekapNilai] = useState([]);
+
+                const fetchData = async (targetTab) => {
+                    setLoading(true);
+                    try {
+                        if(targetTab === 'bank') setBankSoal(await apiDatabase('getDaftarSoalAdmin'));
+                        else setRekapNilai(await apiDatabase('getRekapNilai'));
+                    } catch(e) { showToast("Gagal mengambil data", "error"); }
+                    setLoading(false);
+                };
+
+                useEffect(() => { fetchData(tab); }, [tab]);
+
+                const handleDelete = (id) => {
+                    requestConfirm("Hapus Soal", "Yakin hapus soal ini permanen?", async () => {
+                        setLoading(true);
+                        try {
+                            await apiDatabase('hapusSoalAdmin', id);
+                            showToast("Soal dihapus"); fetchData('bank');
+                        } catch(e) { showToast("Gagal menghapus", "error"); }
+                        setLoading(false);
+                    }, true);
+                };
+
+                const handleExcel = (e) => {
+                    const file = e.target.files[0]; if(!file) return;
+                    const reader = new FileReader();
+                    reader.onload = async (ev) => {
+                        try {
+                            const data = new Uint8Array(ev.target.result);
+                            const wb = XLSX.read(data, {type: 'array'});
+                            const ws = wb.Sheets[wb.SheetNames[0]];
+                            const json = XLSX.utils.sheet_to_json(ws, {header: 1});
+                            
+                            let toImport = [];
+                            for(let i=1; i<json.length; i++) {
+                                if(json[i].length >= 10 && json[i][0]) {
+                                    // Sesuai struktur: Bab, Sub, Kesul, Pertanyaan, A, B, C, D, E, Kunci
+                                    toImport.push([json[i][0], json[i][1]||"-", json[i][2]||"Dasar", json[i][3], json[i][4], json[i][5], json[i][6], json[i][7], json[i][8]||"", json[i][9]]);
+                                }
+                            }
+                            if(toImport.length > 0) {
+                                setLoading(true);
+                                const res = await apiDatabase('importSoalMasal', toImport);
+                                showToast(res.message); fetchData('bank');
+                                setLoading(false);
+                            } else showToast("Format Excel salah / kosong", "error");
+                        } catch(err) { showToast("Gagal membaca Excel", "error"); }
+                    };
+                    reader.readAsArrayBuffer(file);
+                };
+
+                return (
+                    <div className="flex-1 flex flex-col">
+                        <div className="flex gap-8 mb-8 border-b border-slate-200">
+                            <button onClick={()=>setTab('bank')} className={`pb-4 px-2 font-bold text-lg flex items-center gap-2 transition-all border-b-4 ${tab==='bank' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400 hover:text-slate-700'}`}>
+                                <i className="ph ph-database text-xl"></i> Bank Soal
+                            </button>
+                            <button onClick={()=>setTab('nilai')} className={`pb-4 px-2 font-bold text-lg flex items-center gap-2 transition-all border-b-4 ${tab==='nilai' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400 hover:text-slate-700'}`}>
+                                <i className="ph ph-chart-bar text-xl"></i> Rekap Nilai
+                            </button>
+                        </div>
+
+                        {tab === 'bank' && (
+                            <div className="flex-1">
+                                <div className="bg-white border border-slate-200 rounded-3xl p-6 mb-8 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 shadow-sm">
+                                    <div>
+                                        <h3 className="font-extrabold text-slate-800 mb-1 flex items-center gap-2"><i className="ph ph-microsoft-excel-logo text-xl text-green-600"></i> Impor Soal Masal (Excel)</h3>
+                                        <p className="text-sm text-slate-500 font-medium">Gunakan file Excel (XLSX). Kolom: Bab | Sub | Kesulitan | Tanya | A | B | C | D | E | Kunci</p>
+                                    </div>
+                                    <div className="relative">
+                                        <input type="file" accept=".xlsx" onChange={handleExcel} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                                        <button className="bg-green-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-green-700 transition shadow-md shadow-green-600/20 flex items-center gap-2">
+                                            <i className="ph ph-upload-simple"></i> Upload & Impor
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div className="border border-slate-200 rounded-3xl overflow-hidden shadow-sm bg-white">
+                                    <div className="overflow-x-auto custom-scroll max-h-[500px]">
+                                        <table className="min-w-full text-left text-sm whitespace-nowrap">
+                                            <thead className="bg-slate-50 border-b border-slate-200 font-bold text-slate-500 uppercase tracking-wider text-xs sticky top-0">
+                                                <tr><th className="py-5 px-6">ID / Bab</th><th className="py-5 px-6 w-full">Pertanyaan</th><th className="py-5 px-6 text-center">Aksi</th></tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-slate-100">
+                                                {bankSoal.length === 0 && <tr><td colSpan="3" className="py-8 text-center text-slate-500 font-medium">Belum ada soal</td></tr>}
+                                                {bankSoal.map((row, i) => (
+                                                    <tr key={i} className="hover:bg-slate-50 transition-colors">
+                                                        <td className="py-4 px-6 align-top">
+                                                            <span className="font-bold text-slate-800 block text-sm">{row[0]}</span>
+                                                            <span className="text-xs font-semibold bg-slate-100 text-slate-500 px-2 py-0.5 rounded mt-1 inline-block">{row[1]} | {row[3]}</span>
+                                                        </td>
+                                                        <td className="py-4 px-6 align-top text-slate-700 font-medium"><div className="truncate max-w-[300px] xl:max-w-[600px]">{row[4]}</div></td>
+                                                        <td className="py-4 px-6 align-top text-center"><button onClick={()=>handleDelete(row[0])} className="text-red-500 hover:bg-red-50 px-3 py-1.5 rounded-lg text-sm font-bold transition-colors">Hapus</button></td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {tab === 'nilai' && (
+                            <div className="border border-slate-200 rounded-3xl overflow-hidden shadow-sm bg-white">
+                                <div className="overflow-x-auto custom-scroll max-h-[600px]">
+                                    <table className="min-w-full text-left text-sm whitespace-nowrap">
+                                        <thead className="bg-slate-50 border-b border-slate-200 font-bold text-slate-500 uppercase tracking-wider text-xs sticky top-0">
+                                            <tr><th className="py-5 px-6">Waktu</th><th className="py-5 px-6">Siswa</th><th className="py-5 px-6">Tipe Latihan</th><th className="py-5 px-6 text-center">Skor</th></tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100">
+                                            {rekapNilai.length === 0 && <tr><td colSpan="4" className="py-8 text-center text-slate-500 font-medium">Belum ada data nilai</td></tr>}
+                                            {[...rekapNilai].reverse().map((row, i) => {
+                                                const d = new Date(row[0]);
+                                                return (
+                                                    <tr key={i} className="hover:bg-slate-50 transition-colors">
+                                                        <td className="py-4 px-6 align-top text-sm font-medium text-slate-500">{d.toLocaleDateString('id-ID')} {d.toLocaleTimeString('id-ID')}</td>
+                                                        <td className="py-4 px-6 align-top">
+                                                            <span className="font-bold text-slate-800 block text-base">{row[2]}</span>
+                                                            <span className="text-xs text-slate-400 font-medium">NIS: {row[1]}</span>
+                                                        </td>
+                                                        <td className="py-4 px-6 align-top"><span className="bg-slate-100 border border-slate-200 text-slate-700 px-3 py-1 rounded-lg font-bold text-xs">{row[3]}</span></td>
+                                                        <td className="py-4 px-6 align-top text-center"><span className="font-black text-blue-600 text-lg">{row[6]}</span></td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                );
+            };
+
+            return (
+                <div className="min-h-screen flex flex-col">
+                    <nav className="bg-white border-b border-slate-200 sticky top-0 z-40 shadow-sm">
+                        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                                <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white">
+                                    <i className="ph ph-graduation-cap text-xl font-bold"></i>
+                                </div>
+                                <h1 className="text-xl font-extrabold text-slate-800 tracking-tight">EduCBT</h1>
+                            </div>
+                            
+                            <div className="flex items-center gap-4">
+                                {currentUser ? (
+                                    <div className="flex items-center gap-4">
+                                        <div className="text-right hidden sm:block">
+                                            <p className="font-bold text-slate-800 text-sm leading-tight">{currentUser.nama}</p>
+                                            <p className="text-xs text-slate-500 font-medium">{currentUser.role}</p>
+                                        </div>
+                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm uppercase ${currentUser.role === 'Admin' ? 'bg-amber-500' : 'bg-blue-600'}`}>
+                                            {currentUser.nama.charAt(0)}
+                                        </div>
+                                        <button onClick={handleLogout} className="text-sm bg-slate-100 text-slate-500 p-2 sm:px-4 sm:py-2 rounded-full hover:bg-red-50 hover:text-red-600 font-bold transition-colors flex items-center gap-2">
+                                            <i className="ph ph-sign-out text-lg sm:text-base"></i> <span className="hidden sm:inline">Keluar</span>
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <button onClick={() => setAuthModal({
+                                        isOpen: true, role: 'Guru', 
+                                        onSuccess: (user) => {
+                                            setCurrentUser(user);
+                                            setAuthModal({ isOpen: false, role: null, onSuccess: null });
+                                            showToast(`Selamat datang, ${user.nama}!`);
+                                            setView('admin-dash');
+                                        }
+                                    })} className="flex items-center gap-2 text-sm font-bold text-slate-600 bg-slate-100 px-5 py-2.5 rounded-full hover:bg-blue-50 hover:text-blue-700 transition-colors">
+                                        <i className="ph ph-user-circle text-lg"></i> <span>Portal Guru</span>
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </nav>
+
+                    <main className="flex-grow max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8 flex flex-col">
+                        {view === 'student-dash' && <StudentDashView />}
+                        {view === 'admin-dash' && <AdminDashView />}
+                        {view === 'quiz' && <CBTView />}
+                        {view === 'result' && <ResultView />}
+                    </main>
+
+                    {loading && <LoadingOverlay />}
+                    {toast && <Toast message={toast.message} type={toast.type} />}
+                    
+                    <AuthModal 
+                        isOpen={authModal.isOpen} 
+                        role={authModal.role} 
+                        onClose={() => setAuthModal({isOpen: false, role: null, onSuccess: null})} 
+                        onLoginSuccess={authModal.onSuccess} 
+                    />
+
+                    <ConfirmModal 
+                        isOpen={confirmDialog.isOpen} 
+                        title={confirmDialog.title} 
+                        message={confirmDialog.message} 
+                        onConfirm={confirmDialog.onConfirm} 
+                        onCancel={() => setConfirmDialog({isOpen: false})}
+                        isDanger={confirmDialog.isDanger}
+                    />
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
